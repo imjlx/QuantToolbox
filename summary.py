@@ -12,7 +12,10 @@
 
 import pandas as pd
 import numpy as np
+from scipy import stats
+
 import matplotlib.pyplot as plt
+
 
 
 # ============================== 计算因子信息 ==============================
@@ -99,62 +102,120 @@ def info(pnl: pd.Series, turnover: pd.Series, fee: pd.Series, position: pd.Serie
     return df, summary
 
 
-# ============================== 回测绘图 ==============================
+def infos(pnl: pd.Series, turnover: pd.Series, fee: pd.Series, position: pd.Series, time_table: list):
+    summary = []
+    for i in range(len(time_table)):
+        # 切片分段的数据
+        start = time_table[i][1]; end = time_table[i][2]
+        pnl_ = pnl.loc[start: end]
+        turnover_ = turnover.loc[start: end]
+        fee_ = fee.loc[start: end]
+        position_ = position.loc[start: end]
+        # 计算info
+        _, s = info(pnl_, turnover_, fee_, position_)
+        summary.append(s)
+    
+    return pd.concat(summary, axis=1)
 
-def plot(pnl, turnover, fee, position, ofs_time=None, base_dict=None, title='Backtest', btinfo=None):
-    # 计算基本信息
-    pnldf, summary = info(pnl, turnover, fee, position)
-    if base_dict is not None:
-        pnldf_base, summary_base = info(base_dict['pnl'], base_dict['turnover'] , base_dict['fee'], base_dict['position'])
-    else:
-        summary_base = None
+def stat(summary1, summary2):
+
+    res = pd.DataFrame(
+        index=['alpha', 'sigma', 'annual_ret', 'Sharpe', 'turnover', 'nb_stock', 'win_rate'],
+        columns=['t_stat', 'p_value'])
+    for index in res.index:
+        res.loc[index, 't_stat'], res.loc[index, 'p_value'] = stats.ttest_rel(
+            summary1.loc[index], summary2.loc[index])
+        
+    return res
     
-    fig = plt.figure(figsize=(10, 8), layout='constrained')
-    gs = fig.add_gridspec(4, 8)
     
-    # 主图
-    ax1 = fig.add_subplot(gs[:-1, :-1])
-    if base_dict is not None:
-        ax1_twin = ax1.twinx()
-    handles, labels = [], []
-    if ofs_time is None:
-        line, = ax1.plot(pnldf['pnl_cum'].index, pnldf['pnl_cum'], c='b')
-        handles.append(line); labels.append('pnl')
-        if base_dict is not None:
-            pnldf['diff'] = pnldf['pnl_cum'] - pnldf_base['pnl_cum']
-            
-            pdata = pnldf_base['pnl_cum']
-            line, = ax1.plot(pdata.index, pdata, c='grey')
-            handles.append(line); labels.append('base')
-            
-            pdata = pnldf['diff']
-            line, = ax1_twin.plot(pdata.index, pdata, 'y--')
-            handles.append(line); labels.append('diff')   
-    else:
-        line, = ax1.plot(pnldf['pnl_cum'].loc[:ofs_time].index, pnldf['pnl_cum'].loc[:ofs_time], c='steelblue')
-        handles.append(line); labels.append('pnl')
-        line, = ax1.plot(pnldf['pnl_cum'].loc[ofs_time:].index, pnldf['pnl_cum'].loc[ofs_time:], c='steelblue', ls='--', alpha=0.7)
-        if base_dict is not None:
-            pnldf['diff'] = pnldf['pnl_cum'] - pnldf_base['pnl_cum']
-            
-            line, = ax1.plot(pnldf_base['pnl_cum'].loc[:ofs_time].index, pnldf_base['pnl_cum'].loc[:ofs_time], 'lightgrey')
-            handles.append(line); labels.append('base')
-            line, = ax1.plot(pnldf_base['pnl_cum'].loc[ofs_time:].index, pnldf_base['pnl_cum'].loc[ofs_time:], 'lightgrey', alpha=0.7)
-            
-            line, = ax1_twin.plot(pnldf['diff'].loc[:ofs_time].index, pnldf['diff'].loc[:ofs_time], 'r--', lw=0.5, alpha=0.7)
-            handles.append(line); labels.append('diff')
-            line, = ax1_twin.plot(pnldf['diff'].loc[ofs_time:].index, pnldf['diff'].loc[ofs_time:], 'r--', lw=0.5, alpha=0.7)
-    ax1.grid(True)
-    ax1.set_xlabel('')
-    ax1.legend(handles=handles, labels=labels)
-    ax1.set_title(", ".join([f"{key}: {value}" for key, value in btinfo.items()]))
+# ============================== 回测绘图 ==============================
+class Plotter(object):
+    c = ['steelblue', 'palevioletred', 'y', 'seagreen', 
+         'chocolate', 'indigo', 'darkred', 'gold', 
+         'slategrey', 'palegreen']
     
-    # 回撤图
-    ax2 = fig.add_subplot(gs[-1, :-1])
-    ax2.bar(pnldf['drawdowm'].index, pnldf['drawdowm'], color='grey')
-    ax2.xaxis.set_visible(False)
-    
-    # 信息表格
+    def __init__(self, ofs_time=None) -> None:
+        """
+        初始化画布
+        """
+        self.ofs_time = ofs_time
+        
+        self.fig = plt.figure(figsize=(10, 8), layout='constrained')
+        gs = self.fig.add_gridspec(4, 10)
+        self.ax1 = self.fig.add_subplot(gs[:-1, :])
+        self.ax2 = self.fig.add_subplot(gs[-1, 0:2])
+        self.ax3 = self.fig.add_subplot(gs[-1, 2:4])
+        if ofs_time is not None:
+            self.ax4 = self.fig.add_subplot(gs[-1, 4:6])
+            self.ax5 = self.fig.add_subplot(gs[-1, 6:8])
+        
+        self.ax6 = self.fig.add_subplot(gs[-1, 8:]); self.ax6.axis('off')
+        
+        self.pnls, self.summarys, self.handles, self.labels = [], [], [], []
+        
+    def plot_pnl(self, pnl, turnover, fee, position, **kwargs):
+        
+        ofs_time = self.ofs_time
+        
+        label = f'pnl_{len(self.handles)+1}' if 'label' not in kwargs else kwargs['label']
+        if 'c' not in kwargs and 'color' not in kwargs:
+            c = self.c[len(self.handles)]
+        else:
+            c = kwargs['c'] if 'c' in kwargs else kwargs['color']
+                    
+        pnldf, summary = info(pnl, turnover, fee, position)
+        # self.pnls.append(pnldf); self.summarys.append(summary)
+        self.main_pnldf = pnldf
+        
+        if ofs_time is None:
+            line, = self.ax1.plot(pnldf['pnl_cum'].index, pnldf['pnl_cum'], c=c)
+            self.handles.append(line); self.labels.append(label); self.summarys.append([summary, ])
+        else:
+            # 样本内
+            line, = self.ax1.plot(pnldf['pnl_cum'].loc[:ofs_time].index, pnldf['pnl_cum'].loc[:ofs_time], c=c)
+            self.handles.append(line); self.labels.append(label)
+            _, summary_in = info(pnl.loc[:ofs_time], turnover.loc[:ofs_time], fee.loc[:ofs_time], position.loc[:ofs_time])
+            # 样本外
+            line, = self.ax1.plot(pnldf['pnl_cum'].loc[ofs_time:].index, pnldf['pnl_cum'].loc[ofs_time:], c=c, ls='--', alpha=0.7)
+            _, summary_out = info(pnl.loc[ofs_time:], turnover.loc[ofs_time:], fee.loc[ofs_time:], position.loc[ofs_time:])
+            
+            self.summarys.append([summary, summary_in, summary_out])
+        
+        # 只给第一个pnl画回撤图
+        # if len(self.handles) == 1:
+        #     self.ax2.bar(pnldf['drawdowm'].index, pnldf['drawdowm'], color='grey')
+        #     self.ax2.xaxis.set_visible(False)
+        
+        return pnldf, summary
+            
+    def plot_pnl_base(self, pnl, turnover, fee, position, **kwargs):
+        label = 'base' if 'label' not in kwargs else kwargs['label']
+        ofs_time = self.ofs_time
+        
+        pnldf, summary = info(pnl, turnover, fee, position)
+        # self.summarys.append(summary)
+        
+        if self.ofs_time is None:
+            line, = self.ax1.plot(pnldf['pnl_cum'].index, pnldf['pnl_cum'], c='lightgrey')
+            self.handles.append(line); self.labels.append(label); self.summarys.append([summary, ])
+        else:
+            # 样本内
+            line, = self.ax1.plot(pnldf['pnl_cum'].loc[:ofs_time].index, pnldf['pnl_cum'].loc[:ofs_time], c='lightgrey')
+            self.handles.append(line); self.labels.append(label)
+            _, summary_in = info(pnl.loc[:ofs_time], turnover.loc[:ofs_time], fee.loc[:ofs_time], position.loc[:ofs_time])
+            # 样本外
+            line, = self.ax1.plot(pnldf['pnl_cum'].loc[ofs_time:].index, pnldf['pnl_cum'].loc[ofs_time:], c='lightgrey', ls='--', alpha=0.9)
+            _, summary_out = info(pnl.loc[ofs_time:], turnover.loc[ofs_time:], fee.loc[ofs_time:], position.loc[ofs_time:])
+            
+            self.summarys.append([summary, summary_in, summary_out])
+        
+        if len(self.handles) == 2:
+            ax1_twin = self.ax1.twinx()
+            line, = ax1_twin.plot(pnldf['pnl_cum'].index, self.main_pnldf['pnl_cum']-pnldf['pnl_cum'], 'r--', lw=0.5)
+            self.handles.append(line); self.labels.append('diff')
+
+    @staticmethod
     def restructure_summary(summary):
         'alpha', 'sigma', 'annual_ret', 'Sharpe', 'turnover', 'nb_stock', 'win_rate', 'mdd', 'mdd_date'
         structed = summary.copy()
@@ -167,49 +228,64 @@ def plot(pnl, turnover, fee, position, ofs_time=None, base_dict=None, title='Bac
         structed['win_rate'] = f"{structed['win_rate']: .2f}"
         structed['mdd'] = f"{structed['mdd']: .2f}%"
         structed['mdd_date'] = f"{structed['mdd_date'].strftime('%Y-%m-%d')}"
+        # structed['mdd_date'] = f"{structed['mdd_date']}"
         return structed
     
+    @staticmethod
     def plot_info_tabel(ax, summary, summary_base=None, title=None):
-        text = np.expand_dims(restructure_summary(summary).to_numpy(), axis=0).T
-        width = [1.2]; cc = [[('steelblue', 0.5)]]* len(summary)
+        text = np.expand_dims(Plotter.restructure_summary(summary).to_numpy(), axis=0).T
+        cc = [[('steelblue', 0.5)]]* len(summary)
         if summary_base is not None:    # 列出基准信息
             text = np.concatenate(
-                [text, np.expand_dims(restructure_summary(summary_base).to_numpy(), axis=0).T], 
+                [text, np.expand_dims(Plotter.restructure_summary(summary_base).to_numpy(), axis=0).T], 
                 axis=1)
-            width = [1, 1]; cc = [[('steelblue', 0.5), 'lightgrey']] * len(summary)
+            cc = [[('steelblue', 0.5), 'lightgrey']] * len(summary)
             
-        ax.table(cellText=text, cellColours=cc, rowLabels=summary.index, loc='best', colWidths=width)
+        ax.table(cellText=text, cellColours=cc, loc='best')
         ax.axis('off')
         ax.set_title(title)
     
-    # 全区间信息
-    ax3 = fig.add_subplot(gs[0, -1])
-    plot_info_tabel(ax3, summary, summary_base, title='All Time')
+    def plot_stat(self, ax, stat_result=None):
+        """
+        对分段效果进行统计检验
+        """
+        cc = [['yellow', 'yellow'] if p < 0.05 else ['white', 'white'] for p in stat_result['p_value']]
+        ax.table(cellText=np.around(stat_result.to_numpy().astype(float), 2), loc='best', cellColours=cc)
+        ax.axis('off')
+        ax.set_title('Paired t-test')
     
-    if ofs_time is not None:
-        # 样本内信息
-        ax4 = fig.add_subplot(gs[1, -1])
-        _, summary = info(pnl.loc[:ofs_time], turnover.loc[:ofs_time], fee.loc[:ofs_time], position.loc[:ofs_time])
-        if base_dict is not None:
-            _, summary_base = info(
-                base_dict['pnl'].loc[:ofs_time], base_dict['turnover'].loc[:ofs_time], 
-                base_dict['fee'].loc[:ofs_time], base_dict['position'].loc[:ofs_time])
-        plot_info_tabel(ax4, summary, summary_base, title='In Sample')
+    def plot_info(self, stat_result=None):
+        # 项目
+        labels = np.expand_dims(self.summarys[0][0].index.to_numpy(), axis=0).T
+        self.ax2.table(cellText=labels, loc='best', fontsize=20, colWidths=[0.6, ])
+        self.ax2.axis('off')
         
-        # 样本外信息
-        ax5 = fig.add_subplot(gs[2, -1])
-        _, summary = info(pnl.loc[ofs_time:], turnover.loc[ofs_time:], fee.loc[ofs_time:], position.loc[ofs_time:])
-        if base_dict is not None:
-            _, summary_base = info(
-                base_dict['pnl'].loc[ofs_time:], base_dict['turnover'].loc[ofs_time:], 
-                base_dict['fee'].loc[ofs_time:], base_dict['position'].loc[ofs_time:])
-        plot_info_tabel(ax5, summary, summary_base, title='Out Sample')
-    
-    fig.suptitle(title)
-    
-    plt.plot()
-    
-
-
-
-
+        # 全区间信息
+        summary_base = self.summarys[1][1] if len(self.summarys) > 1 else None
+        self.plot_info_tabel(ax=self.ax3, summary=self.summarys[0][0], summary_base=summary_base, title='All Time')
+        ofs_time = self.ofs_time
+        
+        if ofs_time is not None:
+            # 样本内信息
+            summary_base = self.summarys[1][1] if len(self.summarys) > 1 else None
+            self.plot_info_tabel(ax=self.ax4, summary=self.summarys[0][1], summary_base=summary_base, title='In Sample')
+            
+            # 样本外信息
+            summary_base = self.summarys[1][2] if len(self.summarys) > 1 else None
+            self.plot_info_tabel(ax=self.ax5, summary=self.summarys[0][2], summary_base=summary_base, title='Out Sample')
+        
+        if stat_result is not None:
+            self.plot_stat(ax=self.ax6, stat_result=stat_result)
+        
+        # 返回样本外的summary
+        return self.summarys[0][2]
+        
+    def show(self, title=None, suptitle=None):
+        self.ax1.grid()
+        self.ax1.legend(self.handles, self.labels)
+        self.ax1.set_title(title)
+        
+        self.fig.suptitle(suptitle)
+        
+        self.fig.show()
+        

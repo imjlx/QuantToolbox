@@ -34,7 +34,8 @@ def section_clip(target: pd.DataFrame, pct_range: tuple = (0.9, 1)):
         target (pd.DataFrame): _description_
         pct_range (tuple): _description_
     """
-    pct = target.rank(axis=1, pct=True, ascending=True)
+    # 用None代替0，不参与排序
+    pct = target.replace(0, None).rank(axis=1, pct=True, ascending=True)
     new_target = target.copy()
     new_target[pct <= pct_range[0]] = 0
     new_target[pct > pct_range[1]] = 0

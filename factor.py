@@ -26,7 +26,7 @@ def plot_correlation(corr: pd.DataFrame):
     plt.show()
     
 
-def corr_analyse(data: pd.DataFrame, thresh=0.7, isPlotCorr=True, isPlotVIF=True):
+def corr_analyse(data: pd.DataFrame, isPlotCorr=True, isPlotVIF=True) -> (pd.DataFrame, pd.Series):
     """对data中每一列值之间的相关性进行分析
 
     Args:
@@ -36,21 +36,24 @@ def corr_analyse(data: pd.DataFrame, thresh=0.7, isPlotCorr=True, isPlotVIF=True
     # 相关性分析
     corr = np.corrcoef(data.values, rowvar=False)   # 使用numpy的corrcoef计算，速度远高于pandas
     corr = pd.DataFrame(corr, index=data.columns, columns=data.columns)
-    plot_correlation(corr)
+    if isPlotCorr:
+        plot_correlation(corr)
     # 输出相关性过大的参数对
-    mask = np.triu(np.ones_like(corr, dtype=bool), k=1) & (abs(corr) > thresh)
+    mask = np.triu(np.ones_like(corr, dtype=bool), k=1) # & (abs(corr) > thresh)
     row_inds, col_inds = np.where(mask)
     corr_results = pd.DataFrame({
-        'Variable 1': corr.columns[row_inds],
-        'Variable 2': corr.columns[col_inds],
-        'Correlation': corr.values[row_inds, col_inds]
+        'var1': corr.columns[row_inds],
+        'var2': corr.columns[col_inds],
+        'corr': corr.values[row_inds, col_inds]
     })
     
     # VIF分析
     vif = pd.Series(np.linalg.inv(corr.to_numpy()).diagonal(), index=corr.columns, name='VIF')
     
-    plt.figure(figsize=(5, 4))
-    vif.hist(bins=50)
-    plt.title('VIF Hist')
+    if isPlotVIF:
+        plt.figure(figsize=(5, 4))
+        vif.hist(bins=50)
+        plt.title('VIF Hist')
     
     return corr_results, vif
+
