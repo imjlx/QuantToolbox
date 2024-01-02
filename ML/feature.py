@@ -6,18 +6,17 @@
 @Author  :   Haoran Jia
 @Version :   1.0
 @Contact :   21211140001@m.fudan.edu.cn
-@License :   (C)Copyright 2023 Haoran Jia.
+@License :   (C)Copyright 2024 Haoran Jia.
 @Desc    :   None
 '''
 
-import os
 import time
 import datetime
 import numpy as np
-from numpy import ndarray
 import pandas as pd
+from tqdm import tqdm, trange
+
 import statsmodels.api as sm
-from tqdm import tqdm
 
 from sklearn import linear_model
 from sklearn.linear_model import LinearRegression
@@ -30,26 +29,7 @@ from functools import partial
 from multiprocessing import Pool
 import multiprocessing as mp
 
-import sys
-sys.path.append('/home/jiahaoran/workspace')
 import QuantToolbox as qb
-
-
-def train_test_split_basic(data_path='data/data.feather', split_date='2021-06-30'):
-    data = pd.read_feather(data_path)
-    data.reset_index(inplace=True)
-    
-    data_train = data[data['date'] <= split_date]
-    data_train.set_index(['date', 'code'], inplace=True)
-    x_train = data_train.loc[:, 'x1':'x160']
-    y_train = data_train['y6']
-    
-    data_test = data[data['date'] > split_date]
-    data_test.set_index(['date', 'code'], inplace=True)
-    x_test = data_test.loc[:, 'x1':'x160']
-    y_test = data_test['y6']
-    
-    return (data_train, x_train, y_train), (data_test, x_test, y_test)
 
 
 # ============================== 步进分析法 ==============================
@@ -62,7 +42,6 @@ class StepwiseSlection(object):
         反向：新特征引入后检验旧特征是否变得不满足p值条件，若不满足就删除
     直到没有新的特征被引入
     """
-    
     def __init__(self, x: pd.DataFrame, y: pd.Series) -> None:
         
         self.X = sm.add_constant(x)
@@ -240,90 +219,10 @@ class StepwiseSlection(object):
             if old_list == current_list:
                 next = False
 
-    # ===============================Old API==========================
-    def one_loop(self, current_list=[], threshold_in=0.05, threshold_out=0.1, n_jobs=10):
-        test_list = list(set(self.X.columns) - set(current_list))
-        nb_test = len(test_list)
-        
-        # 确定使用的特征
-        X = self.X[current_list]
-        # 根据进程数，确定带检验特征的分组
-        nb_test_per_process = len(test_list) // n_jobs
-        idx_sta = np.array(range(0, nb_test, nb_test_per_process))[:n_jobs] # 前nb_jobs个分组
-        idx_end = idx_sta + nb_test_per_process
-        idx_end[-1] = nb_test  # 最后一组扩展到结尾
-       
-        with mp.Manager() as manager:
-            pvalues_dict = manager.dict()
-            counts = mp.Array('i', n_jobs)
-            processes = []
-            for i in range(n_jobs):
-                x_cols = test_list[idx_sta[-1-i]:idx_end[-1-i]] # 倒着取x，保证最长的进程最先开始
-                # 创建进程，完成一部分的计算，拟合pvalues结果保存在pvalues_dict，counts用于记录进程
-                process = mp.Process(target=self.calculate_new_features_pvalues, args=(self.X[x_cols], X, self.y, pvalues_dict, counts, i))
-                process.start()
-                processes.append(process)
-            
-            # 进度条管理
-            pbar_manager = mp.Process(target=self.progress_manager, args=(counts, nb_test))
-            pbar_manager.start()
-            for process in processes:
-                process.join()
-            pbar_manager.join()
-            
-            # pbar = tqdm(total=nb_test)
-            # while True:
-            #     total_progress = sum(counts)
-            #     pbar.n = total_progress
-            #     pbar.refresh()
-            #     if total_progress >= counts:
-            #         break
-            #     time.sleep(0.1)
-            # pbar.close()
-            
-            # for process in processes:
-            #     process.join()
-            
-            # 分析pvalues_dict
-            x_list = pvalues_dict.keys()
-            pvalues_list = pvalues_dict.values()
-            pvalue_list = [pvalues['x_add'] for pvalues in pvalues_list]
-            
-        idx = np.argmin(pvalue_list)
-        x = x_list[idx]
-        p = pvalue_list[idx]
-        
-        if p < threshold_in:
-            print(f"Select feature: {x}, \tp_value={p}")
-            current_list.append(x)
-            # 删除变差到不可接受的x
-            pvalues = pvalues_list[idx].drop('const')
-            x_del = list(pvalues[pvalues > threshold_out].index)
-            print(f"Delete feature: {x_del}, \tp_value={pvalues.max()}")
-            for x in x_del:
-                current_list.remove(x)
-        
-        return current_list
-
-    def Execute_process_old(self, initial_list=[], threshold_in=0.05, threshold_out=0.1, n_jobs=10, log=None):
-        current_list = ['const'] + initial_list
-        
-        next = True; i = 1
-        while next:
-            old_list = current_list.copy()
-            current_list = self.one_loop(current_list, n_jobs=n_jobs, 
-                                         threshold_in=threshold_in, threshold_out=threshold_out)
-            info = f"{i}\t{current_list}\n"
-            print(info)
-            i += 1
-            if log is not None:
-                with open(log, 'a') as f:
-                    f.write(info)
-            if old_list == current_list:
-                next = False
-    
 
 # ============================== 数据预处理类 ==============================
+# 继承sklearn的基类BaseEstimator、TransformerMixin，实现与sklearn相同的接口，
+# 可以无缝组合Pipeline
 
 class ZeroFeatureEliminator(BaseEstimator, TransformerMixin):
     def __init__(self) -> None:
@@ -357,11 +256,9 @@ class ColinearityFeatureEliminator(BaseEstimator, TransformerMixin):
         """
         def find_worst_feature(X: pd.DataFrame, thresh):
             """找出特征矩阵中，VIF最大的特征
-
             Args:
                 X (pd.DataFrame): 特征矩阵
                 thresh (_type_): 阈值
-
             Returns:
                 x: 待删除的特征名
             """
@@ -396,7 +293,11 @@ class ColinearityFeatureEliminator(BaseEstimator, TransformerMixin):
         return X[self.col]
 
 
-class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
+class PartialPCATransformer(BaseEstimator, TransformerMixin):
+    """ 部分PCA数据处理法
+    将特征中共线性高的提取出来，进行PCA，获得新特征。与其余特征拼接构成新特征组合
+    目的：尽可能多得保存原始特征，在处理共线性时也尽可能保留信息，而不是直接删除
+    """
     
     def __init__(self, thresh_vif=5, thresh_cor=0.8, thresh_pca=0.95) -> None:
         super().__init__()
@@ -424,50 +325,3 @@ class CombinedFeatureTransformer(BaseEstimator, TransformerMixin):
         return X_final
 
 
-# ============================== 时序交叉验证 ==============================
-
-
-
-def save_base():
-    print('读取数据...', end='\t')
-    data = pd.read_feather('data/data.feather')
-    base = pd.read_feather('data/base.feather')
-
-    pipeline = Pipeline([
-        ('D0', qb.Tools.ZeroFeatureEliminator()),
-        ('OLS', LinearRegression()),
-    ])
-    p = TimeSeriesCrossValidation(X=data.loc[:, 'x1':'x160'], y=data['y6'], pipeline=pipeline)
-    p.train_test_split(m_train=24, m_test=1)
-    p.Predict_()
-    
-    p.Backtest(ret=data['y1'], limit=data['ud_limit_h3'], pct_range=(0.95, 1), )
-    
-    base['base_24_1'] = p.y_pred
-    base.to_feather('data/base.feather')
-    print(base.columns)
-
-
-if __name__ == "__main__":
-    
-    os.chdir('/home/jiahaoran/workspace')
-    
-    # print('读取数据...', end='\t'); start_time = time.time()
-    # data = pd.read_feather('data/data.feather')
-    # base = pd.read_feather('data/base.feather')
-    # print(f'{time.time() - start_time: .2f} s')
-    
-    # pipeline = Pipeline([
-    #     # ('D0', qb.Tools.ZeroFeatureEliminator()),
-    #     # ('OLS', LinearRegression()),
-    #     ('QuantReg', linear_model.QuantileRegressor(quantile=0.9, solver='highs', alpha=0))
-    # ])
-    # p = TimeSeriesCrossValidation(X=data.loc[:, 'x1':'x160'], y=data['y6'], pipeline=pipeline)
-    # p.train_test_split(m_train=36, m_test=3)
-    # p.Predict_()
-    # print("画图...")
-    # p.Backtest(ret=data['y1'], limit=data['ud_limit_h3'], base=base['base_36_3'], pct_range=(0.95, 1), 
-    #            title='VIF backward feature elimination', 
-    #            # title='thresh_vif=5, thresh_cor=0.7, thresh_pca=0.95'
-    #            )
-    # print(f'共{time.time() - start_time: .2f} s')

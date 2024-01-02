@@ -259,7 +259,7 @@ def search_param(func: callable, args: list, args_name=None, desc="No Desc", **k
             param_info = {name: arg for arg, name in zip(args, args_name)} if args_name is not None else args
             fig.suptitle(param_info)
             fig.show()
-        elif sum(isIter) == 2:  # 若有2个优化参数，利用QSimPy画三维图
+        elif sum(isIter) == 2:  # 若有2个优化参数，画三维图
             idx_plot = [idx for idx, value in enumerate(isIter) if value]
             name_plot = [args_name[idx] for idx in idx_plot]
             
