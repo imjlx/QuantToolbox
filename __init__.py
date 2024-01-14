@@ -8,6 +8,8 @@ from QuantToolbox.others import Tools
 
 from QuantToolbox.ML.model import OLS
 from QuantToolbox.ML import validation
+from QuantToolbox.ML import feature
+
 
 import importlib
 importlib.reload(backtest)
@@ -19,3 +21,4 @@ importlib.reload(param)
 importlib.reload(Tools)
 importlib.reload(OLS)
 importlib.reload(validation)
+importlib.reload(feature)

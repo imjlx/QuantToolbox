@@ -128,13 +128,14 @@ class TimeSeriesCrossValidation(object):
             
         return self.y_pred
     
-    def Backtest(self, price=None, ret='y1', limit='ud_limit_h3', base=None, 
+    def Backtest(self, price=None, ret='y1', limit='ud_limit_h3', base=None, ofs_time=None, 
                  data=None, pct_range=(0.9, 1), fee_bps=5, label='pnl', isPlot=True, title=None):
         # 回测
         pnl1, to1, fee1 = qb.backtest.cross_section_lf(
             target=self.y_pred, price=price, ret=ret, limit=limit, data=data, pct_range=pct_range, fee_bps=fee_bps)
         
-        ofs_time = self.time_table[0][1]
+        # 如果不给定，自动使用最早的样本外时间
+        ofs_time = self.time_table[0][1] if ofs_time is None else ofs_time
         
         # 不画图，只计算样本外效果
         if not isPlot:

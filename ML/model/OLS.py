@@ -91,7 +91,7 @@ class WeightedRidge(BaseEstimator, RegressorMixin):
         self.sample_weight = sample_weight
 
     def fit(self, X, y, sample_weight=None):
-        
+        # print(len(X.columns))
         # 设定权重
         if self.method is None: # 直接用给定的权重
             sample_weight = self.sample_weight

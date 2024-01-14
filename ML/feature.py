@@ -17,6 +17,7 @@ import pandas as pd
 from tqdm import tqdm, trange
 
 import statsmodels.api as sm
+import scipy.stats as stats
 
 from sklearn import linear_model
 from sklearn.linear_model import LinearRegression
@@ -36,11 +37,16 @@ import QuantToolbox as qb
 
 class StepwiseSlection(object):
     """步进分析法：Wrapper Method 以线性回归作为Wrapper。
-    作用：筛选出对回归变量y解释能力强的特征，去掉解释能力不显著的。（不能解决共线性问题）
-    每轮
+    背景：在线性多因子组合模型中，以全部特征训练的模型，可能会有特征对模型的贡献不显著。
+            步进分析法可以找出全部特征的一个子集，使得子集中全部特征均对模型有贡献。
+    作用：筛选出对回归变量y解释能力强的特征，去掉解释能力不显著的，以期降低过拟合提高模型预测能力。
+    每轮：
         正向：从0特征开始，每次计算引入新特征的p值，选择所有备选特征中p值最高的、且满足阈值条件的引入
         反向：新特征引入后检验旧特征是否变得不满足p值条件，若不满足就删除
-    直到没有新的特征被引入
+    直到所有未引入特征p值均不能达到阈值要求
+    加速方法：
+        n_jobs：每轮计算开启多个进程，可以有效加速
+        refresh_rate：增大每轮引入的特征数，选p值最高的refresh_rate个特征，可能会降低稳定性
     """
     def __init__(self, x: pd.DataFrame, y: pd.Series) -> None:
         
@@ -118,7 +124,7 @@ class StepwiseSlection(object):
     
     @staticmethod
     def progress_manager(progress, total):
-        pbar = tqdm(total=total)
+        pbar = tqdm(total=total, desc="Testing Features")
         last_values = [0] * len(progress)
         while True:
             current_values = list(progress)
@@ -323,5 +329,34 @@ class PartialPCATransformer(BaseEstimator, TransformerMixin):
         X_final = np.concatenate([X_rest, X_new], axis=1)
         # print(X_final.shape)
         return X_final
+
+
+class TimeAvgFeatures(BaseEstimator, TransformerMixin):
+    """ 添加因子的截面均值，表征市场随时间的变化
+    """
+    
+    def __init__(self, isPCA=False) -> None:
+        super().__init__()
+        self.isPCA = isPCA
+    
+    def fit(self, X: pd.DataFrame, y=None):
+        if self.isPCA:
+            mean_df = X.groupby('date').mean().reindex(X.index, level='date')
+            
+            self.pca = PCA(n_components=30)
+            self.pca.fit(mean_df)
+        
+        return self
+    
+    def transform(self, X, y=None):
+        mean_df = X.groupby('date').mean().reindex(X.index, level='date')
+        if self.isPCA:
+            mean_df = self.pca.transform(mean_df)
+            
+        X_out = np.concatenate([X, mean_df], axis=1)
+        
+        return X_out
+
+
 
 
